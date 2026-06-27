@@ -22,4 +22,4 @@ psycopg2-binary==2.9.10
 
 # HTTP intake server
 uvicorn==0.46.0
-python-multipart==0.0.29
+python-multipart==0.0.31
