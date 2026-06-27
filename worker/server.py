@@ -8,7 +8,9 @@ DB — there is NO shared filesystem with core-api. Local drop folders are also 
 table + Redis `status:events` so core-api can read it back.
 """
 import asyncio
+import os
 import shutil
+import socket
 import uuid as _uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,10 +25,10 @@ from Schemas.Enums.service import FilesExtensionEnum
 from status import publish_status
 from service_auth import verify_service_token
 import jobqueue
+import pools
 from ingest import (
     Finder,
     process_csv_file,
-    process_json_file,
     process_excel_file,
     process_cirium_file,
 )
@@ -35,7 +37,6 @@ logger = setup_logger("file_processor")
 
 # kind -> (processor, watch_path, extension, db_name)
 PROCESSORS = {
-    "json": (process_json_file, FILES_PATH, FilesExtensionEnum.JSON, "service"),
     "csv": (process_csv_file, FILES_PATH, FilesExtensionEnum.CSV, "main"),
     "excel": (process_excel_file, EXCEL_FILES_PATH, FilesExtensionEnum.EXCEL, "main"),
     "cirium": (process_cirium_file, CIRIUM_FILES_PATH, FilesExtensionEnum.CIRIUM, "cirium"),
@@ -76,10 +77,19 @@ async def lifespan(app: FastAPI):
     async def _handler(*, kind, path, job_id, ref):
         await process_one(app.state.db_client, app.state.redis, path, kind, job_id)
 
+    # instance-unique consumer ids: a restarted worker recovers its OWN in-flight file and
+    # multiple replicas never collide on fp:proc:* keys. Pin FP_INSTANCE_ID for a stable
+    # identity (else the container hostname) so recovery survives restarts.
+    instance = os.getenv("FP_INSTANCE_ID") or socket.gethostname()
     for i in range(FP_WORKERS):
         app.state.tasks.append(asyncio.create_task(
-            jobqueue.consume(app.state.redis, f"fp-{i}", _handler, logger)
+            jobqueue.consume(app.state.redis, f"{instance}-{i}", _handler, logger)
         ))
+
+    # one reclaim sweeper: re-rings doorbells stuck under a dead/removed consumer (does not drain)
+    app.state.tasks.append(asyncio.create_task(
+        jobqueue.reclaim_loop(app.state.redis, f"{instance}-reclaimer", logger)
+    ))
 
     # folder-watch loops (manual local drops — processed inline)
     for kind, (func, path, ext, db) in PROCESSORS.items():
@@ -97,6 +107,7 @@ async def lifespan(app: FastAPI):
             await t
         except (asyncio.CancelledError, Exception):
             pass
+    pools.shutdown_pool()
     try:
         await app.state.redis.aclose()
     except Exception:
@@ -126,6 +137,7 @@ async def process(
     file: UploadFile = File(...),
     kind: str = Form(...),
     job_id: str = Form(default=None),
+    group: str = Form(default=None),
 ):
     if kind not in PROCESSORS:
         response.status_code = status.HTTP_400_BAD_REQUEST
@@ -136,14 +148,17 @@ async def process(
         return {"error": "Missing or invalid filename"}
 
     job_id = job_id or _uuid.uuid4().hex
+    # group key for per-user FIFO ordering. When the caller doesn't supply one, each file is
+    # its own group (job_id) — i.e. no grouping, maximum cross-file concurrency, as before.
+    group = group or job_id
     INTAKE_PATH.mkdir(parents=True, exist_ok=True)
     dest = INTAKE_PATH / f"{_uuid.uuid4().hex}__{safe_name}"
     await asyncio.to_thread(_save_sync, file.file, dest)
 
     db_client, redis = request.app.state.db_client, request.app.state.redis
-    # enqueue onto the durable Redis-Streams queue; a bounded worker pool processes it
-    await jobqueue.enqueue(redis, kind=kind, path=str(dest), job_id=job_id, ref=str(dest))
+    # enqueue onto the durable, per-group Redis queue; up to FP_WORKERS groups run concurrently
+    await jobqueue.enqueue(redis, group=group, kind=kind, path=str(dest), job_id=job_id, ref=str(dest))
     await publish_status(db_client, redis, job_id=job_id, kind="file", ref=str(dest), state="queued")
 
     response.status_code = status.HTTP_202_ACCEPTED
-    return {"job_id": job_id, "kind": kind, "filename": safe_name}
+    return {"job_id": job_id, "kind": kind, "filename": safe_name, "group": group}

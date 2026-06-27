@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import io
 from pathlib import Path
@@ -10,6 +9,7 @@ from sqlalchemy import select, insert, String, Float, Date, Boolean
 from Config import setup_logger
 from Database.Models import AircraftRevision, CiriumAircrafts
 from Utils import performance_timer
+from pools import run_cpu
 
 logger = setup_logger("cirium_processor")
 
@@ -129,6 +129,13 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _parse_cirium(file_path: str) -> pd.DataFrame:
+    """CPU-bound: read the workbook and normalise its columns. Runs in the process pool
+    (top-level + picklable args/return) so concurrent Cirium files parse on separate cores."""
+    df = pd.read_excel(file_path)
+    return normalize_columns(df)
+
+
 def df_to_csv_buffer(df: pd.DataFrame) -> io.BytesIO:
     buffer = io.BytesIO()
     df.to_csv(buffer, index=False, header=False, encoding="utf-8")
@@ -194,8 +201,8 @@ async def process_cirium_file(session, file: str):
     try:
         rev = await get_or_create_revision(session)
 
-        df = await asyncio.to_thread(pd.read_excel, file_path)
-        df = await asyncio.to_thread(normalize_columns, df)
+        # CPU-bound read + normalise -> separate process (true parallelism, off the loop)
+        df = await run_cpu(_parse_cirium, str(file_path))
         df = df.assign(revision_id=rev.id)
 
         row: AircraftRevision = await session.get(AircraftRevision, rev.id)
