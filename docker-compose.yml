@@ -1,0 +1,38 @@
+# file-processor — production compose.
+#
+# Independent HTTP service: core-api POSTs files to /process (NO shared filesystem).
+# Connects to the SHARED external PostgreSQL + Redis (set DB_HOST / REDIS_HOST in .env;
+# same Redis as core-api for the status:events channel). Has its OWN local storage.
+#
+# core-api reaches this service via CORE-side FILE_PROCESSOR_URL (e.g. http://<host>:8001
+# or, on one docker network, http://file-processor:8000).
+name: file-processor
+
+services:
+  file-processor:
+    build: .
+    image: file-processor:latest
+    container_name: file-processor
+    env_file: [.env]
+    networks: [aixii]
+    ports:
+      - "${HOST_PORT:-8001}:8000"
+    restart: unless-stopped
+    volumes:
+      - intake:/app/api_data            # OWN local storage for received/dropped files
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+volumes:
+  intake:
+
+networks:
+  aixii:
+    external: true

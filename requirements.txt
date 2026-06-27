@@ -1,0 +1,25 @@
+# file-processor — HTTP service dependencies
+# --- base deps (inlined; was shared/requirements-base.txt) ---
+SQLAlchemy==2.0.49
+asyncpg==0.31.0
+pgvector==0.4.2
+pydantic==2.13.4
+pydantic[email]
+pydantic-settings==2.14.1
+inflect==7.5.0
+python-dotenv==1.2.2
+redis==5.3.1
+# Utils.Middlewares (DBProxy/performance_timer) subclasses FastAPI APIRouter,
+# so fastapi is required by every segment (workers included).
+fastapi==0.136.1
+
+# File parsing / bulk DB writes
+pandas==3.0.3
+numpy==1.26.4
+openpyxl==3.1.5
+# psycopg2 (sync) is used by the generic Excel-sheet importer (df.to_sql)
+psycopg2-binary==2.9.10
+
+# HTTP intake server
+uvicorn==0.46.0
+python-multipart==0.0.29
