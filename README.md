@@ -6,8 +6,8 @@ planned) into the database. core-api saves an uploaded file and **POSTs it here*
 local drop folders (Finder loops) for manual drops. Per-file status is published to the
 shared `job_statuses` table + Redis `status:events` (read back via core-api).
 
-It vendors only the model files for the databases it uses (`main`, `service`, `cirium`,
-`powerplatform`) — not the whole schema.
+It vendors only the model files for the databases it uses (`main`, `service`, `cirium`)
+— not the whole schema.
 
 ## Layout
 ```
@@ -16,7 +16,7 @@ worker/
   main.py        # uvicorn entry
   service_auth.py, status.py, settings.py
   ingest/        # CSV/JSON/Excel/Cirium processors
-  Database/      # vendored model subset (main/service/cirium/powerplatform)
+  Database/      # vendored model subset (main/service/cirium)
   Config, Schemas, Utils
 Dockerfile, docker-compose.yml, entrypoint.sh, .env.example
 ```

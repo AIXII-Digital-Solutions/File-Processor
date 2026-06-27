@@ -1,10 +1,10 @@
-import asyncio
 import os
 
 import pandas as pd
 from sqlalchemy import create_engine
 
 from Config import setup_logger, DBSettings
+from pools import run_cpu
 
 logger = setup_logger(name="excel_processor")
 
@@ -41,9 +41,12 @@ async def process_excel_file(session, excel_file: str):
     db_settings = DBSettings()
     try:
         async_engine = session.get_bind()
-        sync_db_url = async_engine.url.set(drivername="postgresql+psycopg2", password=db_settings.DB_PASSWORD)
+        sync_url = async_engine.url.set(drivername="postgresql+psycopg2", password=db_settings.DB_PASSWORD)
+        # render to a plain DSN string: it must be picklable to cross into the process pool
+        sync_dsn = sync_url.render_as_string(hide_password=False)
 
-        tables = await asyncio.to_thread(_write_sheets_sync, excel_file, sync_db_url)
+        # CPU-bound pandas read + to_sql -> a separate process (true parallelism, off the loop)
+        tables = await run_cpu(_write_sheets_sync, excel_file, sync_dsn)
         logger.info(f"[XLSX] Saved sheets: {tables}")
     except Exception as _ex:
         logger.error(f"[XLSX] Error processing: {_ex}")
