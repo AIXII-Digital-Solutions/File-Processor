@@ -167,6 +167,7 @@ async def bulk_insert_df(
             table_name,
             source=buffer,
             columns=columns,
+            schema_name=CiriumAircrafts.__table__.schema,
             format="csv"
         )
 
@@ -208,7 +209,7 @@ async def process_cirium_file(session, file: str):
         row: AircraftRevision = await session.get(AircraftRevision, rev.id)
         len_rows = await bulk_insert_df(
             session=session,
-            table_name="ciriumaircraft",
+            table_name=CiriumAircrafts.__tablename__,
             df=df,
             filename=file_path.name
         )
