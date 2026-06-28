@@ -13,13 +13,14 @@ services:
     build: .
     image: file-processor:latest
     container_name: file-processor
-    env_file: [.env]
-    networks: [aixii]
+    env_file: .env
+    networks:
+      - aixii_net_local
     ports:
       - "${HOST_PORT:-8001}:8000"
     restart: unless-stopped
     volumes:
-      - intake:/app/api_data            # OWN local storage for received/dropped files
+      - ./intake:/app/api_data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
       interval: 30s
@@ -30,9 +31,6 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
 
-volumes:
-  intake:
-
 networks:
-  aixii:
+  aixii_net_local:
     external: true
