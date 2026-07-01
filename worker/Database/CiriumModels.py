@@ -10,6 +10,12 @@ class AircraftRevision(Base):
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True, unique=True)
     data_rows_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Historical back-fill metadata (manual one-off load of 2022-2025 monthly snapshots).
+    # Live revisions written by file-processor keep is_historical=false / period=null / plan_type=null.
+    is_historical: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    period: Mapped[str] = mapped_column(String, nullable=True, default=None)  # e.g. "05-2025"
+    plan_type: Mapped[str] = mapped_column(String, nullable=True, default=None)  # "Commercial" | "Business&Helicopters"
+
     aircrafts: Mapped[list["CiriumAircrafts"]] = relationship(
         back_populates="revision",
         cascade="all, delete-orphan"
@@ -43,6 +49,7 @@ class CiriumAircrafts(Base):
     Operator: Mapped[str] = mapped_column(String, nullable=True, name="Operator")
     Manager: Mapped[str] = mapped_column(String, nullable=True, name="Manager")
     Owner: Mapped[str] = mapped_column(String, nullable=True, name="Owner")
+    Ownership_Type: Mapped[str] = mapped_column(String, nullable=True, name="Ownership Type")
 
     # Engines
     Engine_Type: Mapped[str] = mapped_column(String, nullable=True, name="Engine Type")
