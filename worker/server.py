@@ -13,12 +13,14 @@ import shutil
 import socket
 import uuid as _uuid
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, UploadFile, File, Form, Depends, status
 from redis.asyncio import Redis
 
-from settings import FILES_PATH, EXCEL_FILES_PATH, CIRIUM_FILES_PATH, INTAKE_PATH, FP_WORKERS
+from settings import (FILES_PATH, EXCEL_FILES_PATH, CIRIUM_FILES_PATH, CIRIUM_BUSINESS_FILES_PATH,
+                      INTAKE_PATH, FP_WORKERS)
 from Config import setup_logger, DBSettings
 from Database import DatabaseClient
 from Schemas.Enums.service import FilesExtensionEnum
@@ -32,14 +34,21 @@ from ingest import (
     process_excel_file,
     process_cirium_file,
 )
+from ingest.CiriumFiles import PLAN_COMMERCIAL, PLAN_BUSINESS
 
 logger = setup_logger("file_processor")
 
-# kind -> (processor, watch_path, extension, db_name)
+# kind -> (processor, watch_path, extension, db_name). The two Cirium kinds share one processor but bind a
+# different plan_type via partial, so `kind` alone (already carried through the queue) decides Commercial vs
+# Business&Helicopters — no extra field threads through enqueue/consume. They watch SEPARATE drop folders so a
+# manually-dropped file is processed once, as the plan type of the folder it landed in.
 PROCESSORS = {
     "csv": (process_csv_file, FILES_PATH, FilesExtensionEnum.CSV, "main"),
     "excel": (process_excel_file, EXCEL_FILES_PATH, FilesExtensionEnum.EXCEL, "main"),
-    "cirium": (process_cirium_file, CIRIUM_FILES_PATH, FilesExtensionEnum.CIRIUM, "cirium"),
+    "cirium": (partial(process_cirium_file, plan_type=PLAN_COMMERCIAL),
+               CIRIUM_FILES_PATH, FilesExtensionEnum.CIRIUM, "cirium"),
+    "cirium_business": (partial(process_cirium_file, plan_type=PLAN_BUSINESS),
+                        CIRIUM_BUSINESS_FILES_PATH, FilesExtensionEnum.CIRIUM, "cirium"),
 }
 
 

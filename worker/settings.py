@@ -37,10 +37,12 @@ FP_WORKERS: int = int(require_env("FP_WORKERS", 2))
 # Watched input folders (manual local drops)
 FILES_PATH: Path = ROOT / "input_files"
 EXCEL_FILES_PATH: Path = FILES_PATH / "excel_db"
-CIRIUM_FILES_PATH: Path = EXCEL_FILES_PATH / "cirium"
+CIRIUM_FILES_PATH: Path = EXCEL_FILES_PATH / "cirium"                       # drop -> plan_type Commercial
+CIRIUM_BUSINESS_FILES_PATH: Path = EXCEL_FILES_PATH / "cirium_business"     # drop -> plan_type Business&Helicopters
 NOPASSED_PATH: Path = ROOT / "nopassed"
 # Files received over HTTP land here (this service's OWN local storage).
 INTAKE_PATH: Path = ROOT / "intake"
 
-for _p in (FILES_PATH, EXCEL_FILES_PATH, CIRIUM_FILES_PATH, NOPASSED_PATH, INTAKE_PATH):
+for _p in (FILES_PATH, EXCEL_FILES_PATH, CIRIUM_FILES_PATH, CIRIUM_BUSINESS_FILES_PATH,
+           NOPASSED_PATH, INTAKE_PATH):
     _p.mkdir(parents=True, exist_ok=True)
