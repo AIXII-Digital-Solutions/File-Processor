@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 from asyncpg import PostgresError
-from sqlalchemy import select, insert, String, Float, Date, Boolean
+from sqlalchemy import select, insert, String, Float, Date, Boolean, func
 
 from Config import setup_logger
 from Database.Models import AircraftRevision, CiriumAircrafts
@@ -12,6 +12,12 @@ from Utils import performance_timer
 from pools import run_cpu
 
 logger = setup_logger("cirium_processor")
+
+# The two Cirium plan types. A LIVE upload is tagged by its `kind` (server.py PROCESSORS):
+# kind=cirium -> Commercial, kind=cirium_business -> Business&Helicopters. Must match the historical
+# back-fill's values and what the per-plan matviews (asg_/all_/delta_/latest_) filter on exactly.
+PLAN_COMMERCIAL = "Commercial"
+PLAN_BUSINESS = "Business&Helicopters"
 
 skip_cols = {"revision_id", "id", "created_at", "updated_at"}
 
@@ -68,24 +74,33 @@ def bool_value(val: str | int | float | None) -> bool | None:
 
 
 @performance_timer
-async def get_or_create_revision(session) -> AircraftRevision:
+async def get_or_create_revision(session, plan_type: str | None = None) -> AircraftRevision:
     today = datetime.date.today()
-    last_rev = await session.scalar(
-        select(AircraftRevision).order_by(AircraftRevision.revision_number.desc()).limit(1)
+    # Reuse TODAY's revision FOR THIS plan_type — so Commercial and Business&Helicopters get SEPARATE
+    # revisions even when both are uploaded the same day (the whole point of the plan-type split). Falls back
+    # to the plain "one revision per day" behaviour when plan_type is None (is_not_distinct_from matches NULL).
+    existing = await session.scalar(
+        select(AircraftRevision)
+        .where(func.date(AircraftRevision.created_at) == today,
+               AircraftRevision.plan_type.is_not_distinct_from(plan_type))
+        .order_by(AircraftRevision.revision_number.desc())
+        .limit(1)
     )
+    if existing:
+        logger.debug(f"Using previous revision: {existing.revision_number} (plan_type={plan_type})")
+        return existing
 
-    if not last_rev or last_rev.created_at.date() != today:
-        new_rev = AircraftRevision(
-            revision_number=1 if not last_rev else last_rev.revision_number + 1,
-            created_at=datetime.datetime.now()
-        )
-        session.add(new_rev)
-        await session.flush()
-        logger.debug(f"Created revision: {new_rev.revision_number}")
-        return new_rev
-
-    logger.debug(f"Using previous revision: {last_rev.revision_number}")
-    return last_rev
+    # revision_number is a GLOBAL monotonically-increasing sequence (shared across plan types).
+    max_num = await session.scalar(select(func.max(AircraftRevision.revision_number)))
+    new_rev = AircraftRevision(
+        revision_number=(max_num or 0) + 1,
+        created_at=datetime.datetime.now(),
+        plan_type=plan_type,
+    )
+    session.add(new_rev)
+    await session.flush()
+    logger.debug(f"Created revision: {new_rev.revision_number} (plan_type={plan_type})")
+    return new_rev
 
 
 @performance_timer
@@ -193,18 +208,20 @@ async def bulk_insert_df(
 
 
 @performance_timer
-async def process_cirium_file(session, file: str):
+async def process_cirium_file(session, file: str, plan_type: str | None = None):
     file_path = Path(file)
     if not file_path.exists():
         raise FileNotFoundError(f"Excel file not found: {file}")
-    logger.info(f"Processing file {file_path.name}")
+    logger.info(f"Processing file {file_path.name} (plan_type={plan_type})")
 
     try:
-        rev = await get_or_create_revision(session)
+        rev = await get_or_create_revision(session, plan_type)
 
         # CPU-bound read + normalise -> separate process (true parallelism, off the loop)
         df = await run_cpu(_parse_cirium, str(file_path))
-        df = df.assign(revision_id=rev.id)
+        # stamp both the revision link and the plan type onto every aircraft row (the source xlsx carries
+        # neither) so the per-plan matviews see Commercial vs Business&Helicopters rows.
+        df = df.assign(revision_id=rev.id, plan_type=plan_type)
 
         row: AircraftRevision = await session.get(AircraftRevision, rev.id)
         len_rows = await bulk_insert_df(
